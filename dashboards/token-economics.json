@@ -1,0 +1,171 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "tok/s",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          }
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "sum(rate(vllm:output_tokens_total[1m])) + sum(rate(vllm:input_tokens_total[1m]))",
+          "legendFormat": "throughput"
+        }
+      ],
+      "title": "Throughput (tok/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "($gpu_cost * 24 * 365) / (sum(rate(vllm:output_tokens_total[5m])) * 86400 * 365 / 1000000)",
+          "legendFormat": "cost per 1M"
+        }
+      ],
+      "title": "Cost / 1M tokens",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "tok/s",
+          "decimals": 1
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "(sum(rate(vllm:output_tokens_total[5m])) + sum(rate(vllm:input_tokens_total[5m]))) / ($gpu_cost * 24)",
+          "legendFormat": "perf per dollar"
+        }
+      ],
+      "title": "Perf / $ (tok/s per GPU-hour)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:request_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ],
+      "title": "p95 latency",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "id": 5,
+      "targets": [
+        { "expr": "sum(vllm:num_prefill_requests)", "legendFormat": "prefill" },
+        { "expr": "sum(vllm:num_decoding_requests)", "legendFormat": "decode" }
+      ],
+      "title": "Prefill vs Decode",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1, "min": 0 } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 6,
+      "targets": [
+        { "expr": "avg(vllm:gpu_prefix_cache_hit_rate)", "legendFormat": "prefix cache hit rate" }
+      ],
+      "title": "Prefix Cache Hit Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "id": 7,
+      "targets": [
+        { "expr": "sum(vllm:num_requests_waiting)", "legendFormat": "waiting" },
+        { "expr": "sum(vllm:num_requests_running)", "legendFormat": "running" }
+      ],
+      "title": "Queue Depth",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(vllm:request_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ],
+      "title": "p99 Latency",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["token-economics", "vllm"],
+  "templating": {
+    "list": [
+      {
+        "current": { "text": "1.50", "value": "1.50" },
+        "label": "GPU cost ($/hr)",
+        "name": "gpu_cost",
+        "options": [{ "selected": true, "text": "1.50", "value": "1.50" }],
+        "query": "1.50",
+        "type": "constant"
+      },
+      {
+        "current": {},
+        "hide": 0,
+        "label": "Prometheus",
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-15m", "to": "now" },
+  "title": "Token Economics",
+  "uid": "token-economics",
+  "version": 1
+}

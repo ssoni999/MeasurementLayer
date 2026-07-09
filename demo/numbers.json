@@ -1,0 +1,88 @@
+{
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "gpu_cost_per_hour": 1.5,
+  "num_gpus": 1,
+  "slo_ms": 500,
+  "volume": {
+    "requests_per_day": 500000,
+    "tokens_per_request": 180
+  },
+  "peak_factor": 2.5,
+  "notes": "Team-agreed demo parameters. Tools update replay/profile/cost sections after each run.",
+  "replay": {
+    "throughput_tok_s": 8206.7,
+    "generation_tok_s": 3543.8,
+    "latency_ms": {
+      "p50": 97.4,
+      "p95": 103.6,
+      "p99": 103.8
+    },
+    "ttft_ms": {
+      "p50": 96.6,
+      "p95": 102.5,
+      "p99": 102.7
+    },
+    "requests_ok": 10,
+    "wall_time_s": 0.26,
+    "target": "http://127.0.0.1:18080",
+    "model": "mock-model"
+  },
+  "cost_baseline": {
+    "throughput_tok_s": 8206.7,
+    "tokens_per_year": 32850000000,
+    "needed_tps": 1041.7,
+    "gpus_required": 1,
+    "annual_bill_usd": 1668.0,
+    "cost_per_million_usd": 0.0508,
+    "perf_per_dollar_tok_s": 155174226.9
+  },
+  "knee": {
+    "knee_tps": 950.0,
+    "rate": 16.0,
+    "p95_ms": 450.0,
+    "slo_met": true,
+    "slo_ms": 500.0
+  },
+  "forecast": {
+    "assumptions": {
+      "avg_tps": 500.0,
+      "knee_tps": 950.0,
+      "peak_factor": 2.5,
+      "gpu_cost_per_hour": 1.5,
+      "num_gpus_per_copy": 1,
+      "copies_at_peak_low": 1.12,
+      "copies_at_peak_high": 1.51
+    },
+    "forecasts": [
+      {
+        "growth": "1x",
+        "annual_low_usd": 14696.0,
+        "annual_high_usd": 19883.0
+      },
+      {
+        "growth": "3x",
+        "annual_low_usd": 44088.0,
+        "annual_high_usd": 59649.0
+      },
+      {
+        "growth": "5x",
+        "annual_low_usd": 73480.0,
+        "annual_high_usd": 99414.0
+      }
+    ]
+  },
+  "profile": {
+    "prefill_pct": 20.0,
+    "decode_pct": 80.0,
+    "shared_prefix_pct": 55.0,
+    "queueing": "high",
+    "max_waiting": 3.0,
+    "diagnosis": "decode bound",
+    "recommended_fix": [
+      "FP8 weights (RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8)",
+      "--max-num-seqs 320 --gpu-memory-utilization 0.9",
+      "--enable-prefix-caching",
+      "Increase max-num-seqs or add replicas via KEDA"
+    ]
+  }
+}
