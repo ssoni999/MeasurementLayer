@@ -71,13 +71,12 @@ async def send_request(
     prompt_tokens = 0
     completion_tokens = 0
     try:
-        stream = await client.chat.completions.create(
+        stream = await client.completions.create(
             model=model,
-            messages=[{"role": "user", "content": record.prompt}],
+            prompt=record.prompt,
             max_tokens=record.max_tokens,
             temperature=0,
             stream=True,
-            stream_options={"include_usage": True},
         )
         first_token = None
         async for chunk in stream:
@@ -86,10 +85,8 @@ async def send_request(
                 completion_tokens = chunk.usage.completion_tokens or completion_tokens
             if not chunk.choices:
                 continue
-            delta = chunk.choices[0].delta
-            content = getattr(delta, "content", None) or getattr(
-                delta, "reasoning_content", None
-            )
+            
+            content = getattr(chunk.choices[0], "text", None)
             if content and first_token is None:
                 first_token = time.perf_counter()
         end = time.perf_counter()
