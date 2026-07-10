@@ -6,14 +6,38 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
+import urllib.request
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import openai
+
+
+# #region agent log
+def _agent_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    log_path = os.environ.get("DEBUG_LOG_PATH")
+    if not log_path:
+        return
+    payload = {
+        "sessionId": "fe7190",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except OSError:
+        pass
+# #endregion
 
 
 @dataclass
@@ -58,6 +82,43 @@ def percentile(values: list[float], p: float) -> float:
     if not values:
         return 0.0
     return float(np.percentile(values, p))
+
+
+def check_endpoint(base_url: str) -> None:
+    """Fail fast if the router is unreachable."""
+    models_url = base_url.rstrip("/") + "/models"
+    try:
+        with urllib.request.urlopen(models_url, timeout=5) as resp:
+            body = resp.read(500).decode("utf-8", errors="replace")
+            # #region agent log
+            _agent_log(
+                "H1",
+                "replay.py:check_endpoint",
+                "preflight_ok",
+                {"models_url": models_url, "status": resp.status, "body_preview": body[:200]},
+            )
+            # #endregion
+    except Exception as exc:  # noqa: BLE001
+        # #region agent log
+        _agent_log(
+            "H1",
+            "replay.py:check_endpoint",
+            "preflight_failed",
+            {
+                "models_url": models_url,
+                "exc_type": type(exc).__name__,
+                "exc_msg": str(exc),
+            },
+        )
+        # #endregion
+        print(f"ERROR: Cannot reach {models_url}: {exc}", file=sys.stderr)
+        print(
+            "Hint: start port-forward in another terminal:\n"
+            "  kubectl port-forward svc/vllm-router-service 30080:80\n"
+            "  curl http://localhost:30080/v1/models",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
 
 
 async def send_request(
@@ -140,6 +201,7 @@ async def replay(
     base_url = target.rstrip("/")
     if not base_url.endswith("/v1"):
         base_url = f"{base_url}/v1"
+    check_endpoint(base_url)
     client = openai.AsyncOpenAI(api_key="EMPTY", base_url=base_url)
 
     await warmup(client, model, warmup_count)
@@ -270,7 +332,24 @@ def main() -> int:
         replay(args.target, args.model, trace, args.speed, args.concurrency, args.warmup)
     )
     summary = summarize(results, wall_time, str(trace_path), args.target, args.model)
+    err_counts = Counter(
+        r.get("error", "unknown") for r in summary["results"] if r["status"] != "ok"
+    )
+    # #region agent log
+    _agent_log(
+        "H5",
+        "replay.py:main",
+        "replay_done",
+        {
+            "ok": summary["requests_ok"],
+            "err": summary["requests_error"],
+            "error_histogram": dict(err_counts),
+        },
+    )
+    # #endregion
     print_summary(summary)
+    if summary["requests_error"] > 0:
+        print("Errors (sample):", list(err_counts.items())[:5])
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
