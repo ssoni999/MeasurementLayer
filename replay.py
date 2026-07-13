@@ -132,25 +132,46 @@ def check_endpoint(base_url: str) -> None:
         raise SystemExit(1) from exc
 
 
+def resolve_api_mode(model: str, api: str) -> str:
+    """Pick chat vs completions API. opt-125m and similar base models need completions."""
+    if api != "auto":
+        return api
+    model_lower = model.lower()
+    if "opt-125" in model_lower or "/opt-" in model_lower:
+        return "completions"
+    return "chat"
+
+
 async def send_request(
     client: openai.AsyncOpenAI,
     model: str,
     record: TraceRecord,
     index: int,
+    api_mode: str,
 ) -> RequestResult:
     start = time.perf_counter()
     ttft_ms = 0.0
     prompt_tokens = 0
     completion_tokens = 0
     try:
-        stream = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": record.prompt}],
-            max_tokens=record.max_tokens,
-            temperature=0,
-            stream=True,
-            stream_options={"include_usage": True},
-        )
+        if api_mode == "completions":
+            stream = await client.completions.create(
+                model=model,
+                prompt=record.prompt,
+                max_tokens=record.max_tokens,
+                temperature=0,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+        else:
+            stream = await client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": record.prompt}],
+                max_tokens=record.max_tokens,
+                temperature=0,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
         first_token = None
         async for chunk in stream:
             if hasattr(chunk, "usage") and chunk.usage is not None:
@@ -158,10 +179,13 @@ async def send_request(
                 completion_tokens = chunk.usage.completion_tokens or completion_tokens
             if not chunk.choices:
                 continue
-            delta = chunk.choices[0].delta
-            content = getattr(delta, "content", None) or getattr(
-                delta, "reasoning_content", None
-            )
+            if api_mode == "completions":
+                content = chunk.choices[0].text
+            else:
+                delta = chunk.choices[0].delta
+                content = getattr(delta, "content", None) or getattr(
+                    delta, "reasoning_content", None
+                )
             if content and first_token is None:
                 first_token = time.perf_counter()
         end = time.perf_counter()
@@ -194,13 +218,14 @@ async def send_request(
         )
 
 
-async def warmup(client: openai.AsyncOpenAI, model: str, count: int) -> None:
+async def warmup(client: openai.AsyncOpenAI, model: str, count: int, api_mode: str) -> None:
     for i in range(count):
         await send_request(
             client,
             model,
             TraceRecord(prompt=f"WARMUP request {i}: say ok", max_tokens=8, offset=0.0),
             index=-1,
+            api_mode=api_mode,
         )
 
 
@@ -211,6 +236,7 @@ async def replay(
     speed: float,
     concurrency: int,
     warmup_count: int,
+    api_mode: str,
 ) -> tuple[list[RequestResult], float]:
     base_url = target.rstrip("/")
     if not base_url.endswith("/v1"):
@@ -218,7 +244,7 @@ async def replay(
     check_endpoint(base_url)
     client = openai.AsyncOpenAI(api_key="EMPTY", base_url=base_url)
 
-    await warmup(client, model, warmup_count)
+    await warmup(client, model, warmup_count, api_mode)
 
     semaphore = asyncio.Semaphore(concurrency)
     results: list[RequestResult] = []
@@ -230,7 +256,7 @@ async def replay(
         if delay > 0:
             await asyncio.sleep(delay)
         async with semaphore:
-            result = await send_request(client, model, record, index)
+            result = await send_request(client, model, record, index, api_mode)
             results.append(result)
 
     await asyncio.gather(*(run_one(i, record) for i, record in enumerate(trace)))
@@ -329,7 +355,15 @@ def main() -> int:
     parser.add_argument("--speed", type=float, default=10.0, help="Time compression factor")
     parser.add_argument("--concurrency", type=int, default=32)
     parser.add_argument("--warmup", type=int, default=5)
+    parser.add_argument(
+        "--api",
+        choices=["auto", "chat", "completions"],
+        default="auto",
+        help="API to use: chat (Instruct models), completions (opt-125m etc.), auto (detect)",
+    )
     args = parser.parse_args()
+
+    api_mode = resolve_api_mode(args.model, args.api)
 
     trace_path = Path(args.trace)
     if not trace_path.exists():
@@ -341,9 +375,20 @@ def main() -> int:
         print(f"No records in trace: {trace_path}", file=sys.stderr)
         return 1
 
-    print(f"Replaying {len(trace)} requests to {args.target} (speed={args.speed}x)")
+    print(
+        f"Replaying {len(trace)} requests to {args.target} "
+        f"(speed={args.speed}x, api={api_mode})"
+    )
     results, wall_time = asyncio.run(
-        replay(args.target, args.model, trace, args.speed, args.concurrency, args.warmup)
+        replay(
+            args.target,
+            args.model,
+            trace,
+            args.speed,
+            args.concurrency,
+            args.warmup,
+            api_mode,
+        )
     )
     summary = summarize(results, wall_time, str(trace_path), args.target, args.model)
     err_counts = Counter(
@@ -364,6 +409,12 @@ def main() -> int:
     print_summary(summary)
     if summary["requests_error"] > 0:
         print("Errors (sample):", list(err_counts.items())[:5])
+        if any("chat template" in str(e).lower() for e in err_counts):
+            print(
+                "\nHint: this model needs the completions API:\n"
+                "  make replay TARGET=... MODEL=... API=completions",
+                file=sys.stderr,
+            )
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

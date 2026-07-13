@@ -11,7 +11,8 @@ replay:
 	@test -n "$(MODEL)" || (echo "MODEL is required, e.g. MODEL=meta-llama/Llama-3.1-8B-Instruct" && exit 1)
 	python3 replay.py --target $(TARGET) --model $(MODEL) --trace $(TRACE) --output $(OUTPUT) \
 		$(if $(SPEED),--speed $(SPEED),) \
-		$(if $(CONCURRENCY),--concurrency $(CONCURRENCY),)
+		$(if $(CONCURRENCY),--concurrency $(CONCURRENCY),) \
+		$(if $(API),--api $(API),)
 
 cost:
 	python3 bench/cost_model.py \
