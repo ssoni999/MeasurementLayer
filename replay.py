@@ -158,7 +158,7 @@ async def send_request(
             stream = await client.completions.create(
                 model=model,
                 prompt=record.prompt,
-                max_tokens=record.max_tokens,
+                max_tokens=min(record.max_tokens, 32),
                 temperature=0,
                 stream=True,
                 stream_options={"include_usage": True},
@@ -167,7 +167,7 @@ async def send_request(
             stream = await client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": record.prompt}],
-                max_tokens=record.max_tokens,
+                max_tokens=min(record.max_tokens, 32),
                 temperature=0,
                 stream=True,
                 stream_options={"include_usage": True},
@@ -196,7 +196,7 @@ async def send_request(
         return RequestResult(
             index=index,
             offset=record.offset,
-            max_tokens=record.max_tokens,
+            max_tokens=min(record.max_tokens, 32),
             status="ok",
             latency_ms=latency_ms,
             ttft_ms=ttft_ms,
@@ -208,7 +208,7 @@ async def send_request(
         return RequestResult(
             index=index,
             offset=record.offset,
-            max_tokens=record.max_tokens,
+            max_tokens=min(record.max_tokens, 32),
             status="error",
             latency_ms=(end - start) * 1000,
             ttft_ms=0.0,
