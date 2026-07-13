@@ -113,9 +113,20 @@ def check_endpoint(base_url: str) -> None:
         # #endregion
         print(f"ERROR: Cannot reach {models_url}: {exc}", file=sys.stderr)
         print(
-            "Hint: start port-forward in another terminal:\n"
-            "  kubectl port-forward svc/vllm-router-service 30080:80\n"
-            "  curl http://localhost:30080/v1/models",
+            "\nNothing is listening on that address. Common fixes:\n"
+            "\n"
+            "  1. Connect kubectl to your GKE cluster (if not in Cloud Shell):\n"
+            "     gcloud container clusters get-credentials te-poc --zone=us-central1-a\n"
+            "     kubectl get pods\n"
+            "\n"
+            "  2. Start port-forward and keep it running in another terminal:\n"
+            "     kubectl port-forward svc/vllm-router-service 30080:80\n"
+            "\n"
+            "  3. Verify the router responds:\n"
+            "     curl http://localhost:30080/v1/models\n"
+            "\n"
+            "  Or run MeasurementLayer inside GCP Cloud Shell where kubectl\n"
+            "  is already configured for the cluster you deployed in Steps 1-5.",
             file=sys.stderr,
         )
         raise SystemExit(1) from exc
