@@ -18,6 +18,49 @@ from typing import Optional
 import numpy as np
 import openai
 
+MAX_OUTPUT = 32
+TOKEN_BUFFER = 16
+_tokenizers: dict[str, object] = {}
+
+
+def model_max_context(model: str, override: Optional[int] = None) -> int:
+    if override is not None:
+        return override
+    model_lower = model.lower()
+    if "opt-125" in model_lower:
+        return 2048
+    if "llama" in model_lower:
+        return 8192
+    return 4096
+
+
+def get_tokenizer(model: str):
+    if model not in _tokenizers:
+        from transformers import AutoTokenizer
+
+        _tokenizers[model] = AutoTokenizer.from_pretrained(model)
+    return _tokenizers[model]
+
+
+def truncate_prompt(
+    prompt: str,
+    model: str,
+    output_tokens: int,
+    max_context: Optional[int] = None,
+) -> str:
+    """Fit prompt within model context, reserving space for output + buffer."""
+    context_limit = model_max_context(model, max_context)
+    max_prompt_tokens = context_limit - output_tokens - TOKEN_BUFFER
+    if max_prompt_tokens <= 0:
+        max_prompt_tokens = 1
+
+    tokenizer = get_tokenizer(model)
+    ids = tokenizer.encode(prompt, add_special_tokens=False)
+    if len(ids) > max_prompt_tokens:
+        ids = ids[:max_prompt_tokens]
+        return tokenizer.decode(ids, skip_special_tokens=True)
+    return prompt
+
 
 # #region agent log
 def _agent_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
@@ -148,17 +191,20 @@ async def send_request(
     record: TraceRecord,
     index: int,
     api_mode: str,
+    max_context: Optional[int] = None,
 ) -> RequestResult:
     start = time.perf_counter()
     ttft_ms = 0.0
     prompt_tokens = 0
     completion_tokens = 0
+    output_tokens = min(record.max_tokens, MAX_OUTPUT)
     try:
+        prompt = truncate_prompt(record.prompt, model, output_tokens, max_context)
         if api_mode == "completions":
             stream = await client.completions.create(
                 model=model,
-                prompt=record.prompt,
-                max_tokens=min(record.max_tokens, 32),
+                prompt=prompt,
+                max_tokens=output_tokens,
                 temperature=0,
                 stream=True,
                 stream_options={"include_usage": True},
@@ -166,8 +212,8 @@ async def send_request(
         else:
             stream = await client.chat.completions.create(
                 model=model,
-                messages=[{"role": "user", "content": record.prompt}],
-                max_tokens=min(record.max_tokens, 32),
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=output_tokens,
                 temperature=0,
                 stream=True,
                 stream_options={"include_usage": True},
@@ -196,7 +242,7 @@ async def send_request(
         return RequestResult(
             index=index,
             offset=record.offset,
-            max_tokens=min(record.max_tokens, 32),
+            max_tokens=output_tokens,
             status="ok",
             latency_ms=latency_ms,
             ttft_ms=ttft_ms,
@@ -208,7 +254,7 @@ async def send_request(
         return RequestResult(
             index=index,
             offset=record.offset,
-            max_tokens=min(record.max_tokens, 32),
+            max_tokens=output_tokens,
             status="error",
             latency_ms=(end - start) * 1000,
             ttft_ms=0.0,
@@ -218,7 +264,13 @@ async def send_request(
         )
 
 
-async def warmup(client: openai.AsyncOpenAI, model: str, count: int, api_mode: str) -> None:
+async def warmup(
+    client: openai.AsyncOpenAI,
+    model: str,
+    count: int,
+    api_mode: str,
+    max_context: Optional[int] = None,
+) -> None:
     for i in range(count):
         await send_request(
             client,
@@ -226,6 +278,7 @@ async def warmup(client: openai.AsyncOpenAI, model: str, count: int, api_mode: s
             TraceRecord(prompt=f"WARMUP request {i}: say ok", max_tokens=8, offset=0.0),
             index=-1,
             api_mode=api_mode,
+            max_context=max_context,
         )
 
 
@@ -237,6 +290,7 @@ async def replay(
     concurrency: int,
     warmup_count: int,
     api_mode: str,
+    max_context: Optional[int] = None,
 ) -> tuple[list[RequestResult], float]:
     base_url = target.rstrip("/")
     if not base_url.endswith("/v1"):
@@ -244,7 +298,7 @@ async def replay(
     check_endpoint(base_url)
     client = openai.AsyncOpenAI(api_key="EMPTY", base_url=base_url)
 
-    await warmup(client, model, warmup_count, api_mode)
+    await warmup(client, model, warmup_count, api_mode, max_context)
 
     semaphore = asyncio.Semaphore(concurrency)
     results: list[RequestResult] = []
@@ -256,7 +310,9 @@ async def replay(
         if delay > 0:
             await asyncio.sleep(delay)
         async with semaphore:
-            result = await send_request(client, model, record, index, api_mode)
+            result = await send_request(
+                client, model, record, index, api_mode, max_context
+            )
             results.append(result)
 
     await asyncio.gather(*(run_one(i, record) for i, record in enumerate(trace)))
@@ -361,6 +417,12 @@ def main() -> int:
         default="auto",
         help="API to use: chat (Instruct models), completions (opt-125m etc.), auto (detect)",
     )
+    parser.add_argument(
+        "--max-context",
+        type=int,
+        default=None,
+        help="Model context window (default: 2048 for opt-125m, 8192 for llama)",
+    )
     args = parser.parse_args()
 
     api_mode = resolve_api_mode(args.model, args.api)
@@ -377,7 +439,8 @@ def main() -> int:
 
     print(
         f"Replaying {len(trace)} requests to {args.target} "
-        f"(speed={args.speed}x, api={api_mode})"
+        f"(speed={args.speed}x, api={api_mode}, "
+        f"context={model_max_context(args.model, args.max_context)})"
     )
     results, wall_time = asyncio.run(
         replay(
@@ -388,6 +451,7 @@ def main() -> int:
             args.concurrency,
             args.warmup,
             api_mode,
+            args.max_context,
         )
     )
     summary = summarize(results, wall_time, str(trace_path), args.target, args.model)
