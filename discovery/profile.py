@@ -8,7 +8,6 @@ import json
 import re
 import time
 from pathlib import Path
-from urllib.parse import urljoin
 
 import requests
 
@@ -27,7 +26,7 @@ METRIC_PATTERNS = {
 
 
 def scrape_metrics(target: str) -> str:
-    url = urljoin(target.rstrip("/") + "/", "metrics")
+    url = f"{target.rstrip('/')}/metrics"
     response = requests.get(url, timeout=10)
     response.raise_for_status()
     return response.text
